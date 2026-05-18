@@ -15,22 +15,12 @@ from crypto_bot import create_invoice, check_invoice, transfer_money
 
 router = Router()
 
-# ---------- Усиленный список матов (регулярками) ----------
+# ---------- Максимальный стоп-лист (регулярки) ----------
 BAD_WORDS_PATTERNS = [
-    r'ху[йеё]',       # хуй, хуе, хуё
-    r'пизд',           # пизда, пиздец, пиздос
-    r'еб[ау]',         # ебать, ебу
-    r'бля',            # бля
-    r'сук[аи]',        # сука, суки
-    r'нах[уй]',        # нахуй
-    r'залуп',          # залупа
-    r'жоп',            # жопа
-    r'говн',           # говно
-    r'мудак',          # мудак
-    r'пидор',          # пидор
-    r'член',           # член
-    r'шлюх',           # шлюха
-    r'трах',           # трах
+    r'ху[йеё]', r'пизд', r'еб[ау]', r'бля', r'сук[аи]',
+    r'нах[уй]', r'залуп', r'жоп', r'говн', r'мудак',
+    r'пидор', r'член', r'шлюх', r'трах', r'сос[ие]',
+    r'пис[ь]', r'попк[аи]', r'еб[нр]',  # ебнуть, ебрать
 ]
 
 def has_bad_word(text: str) -> bool:
@@ -40,31 +30,10 @@ def has_bad_word(text: str) -> bool:
             return True
     return False
 
-# ---------- Функция для безопасного вывода в Markdown ----------
 def escape_md(text: str) -> str:
     if not text:
         return text
     return re.sub(r'([_*`\[\]()~\\])', r'\\\1', text)
-
-# ---------- Усиленная проверка осмысленности текста ----------
-def is_meaningful_text(text: str, min_len=2, max_len=50) -> bool:
-    if len(text) < min_len or len(text) > max_len:
-        return False
-    if re.search(r'[<>]', text):
-        return False
-    if has_bad_word(text):
-        return False
-    if not re.search(r'[а-яА-ЯёЁa-zA-Z]', text):
-        return False
-    vowels = r'[аеёиоуыэюяaeiouy]'
-    if not re.search(vowels, text, re.IGNORECASE):
-        return False
-    if len(text) <= 3:
-        return True
-    unique_letters = set(text.lower()) & set("абвгдеёжзийклмнопрстуфхцчшщъыьэюяabcdefghijklmnopqrstuvwxyz")
-    if len(unique_letters) < 2:
-        return False
-    return True
 
 # ==================== /start ====================
 @router.message(CommandStart())
@@ -149,7 +118,7 @@ async def check_payment(callback: CallbackQuery):
     else:
         await callback.answer("Оплата ещё не прошла. Попробуйте позже.", show_alert=True)
 
-# ==================== Продажа (Tele2 + усиленная валидация) ====================
+# ==================== Продажа (только кнопки, без ручного ввода) ====================
 @router.callback_query(F.data == "sell")
 async def start_sell(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите оператора:", reply_markup=operator_choice())
@@ -189,51 +158,21 @@ async def process_price(message: Message, state: FSMContext):
     await message.answer("Выберите регион:", reply_markup=region_choice())
     await state.set_state(SellAd.waiting_region)
 
-# Регион: выбор из кнопок
 @router.callback_query(SellAd.waiting_region, F.data.startswith("region_"))
 async def choose_region(callback: CallbackQuery, state: FSMContext):
     region = callback.data.split("_", 1)[1]
-    if region == "Другой":
-        await callback.message.edit_text("Напишите ваш регион (город, область). Только буквы, пробелы и дефис. Без мата и бессмыслицы (2-50 символов):")
-        await state.set_state(SellAd.waiting_custom_region)
-        return
     await state.update_data(region=region)
     await callback.message.edit_text("Выберите способ передачи:", reply_markup=transfer_choice())
     await state.set_state(SellAd.waiting_transfer)
 
-@router.message(SellAd.waiting_custom_region)
-async def custom_region(message: Message, state: FSMContext):
-    region = message.text.strip()
-    if not is_meaningful_text(region, min_len=2, max_len=50):
-        await message.answer("Некорректный регион. Используйте осмысленное название (буквы, пробелы, дефис). Без мата. Попробуйте ещё раз:")
-        return
-    await state.update_data(region=escape_md(region))
-    await message.answer("Выберите способ передачи:", reply_markup=transfer_choice())
-    await state.set_state(SellAd.waiting_transfer)
-
-# Способ передачи: выбор из кнопок
 @router.callback_query(SellAd.waiting_transfer, F.data.startswith("transfer_"))
 async def choose_transfer(callback: CallbackQuery, state: FSMContext):
     method = callback.data.split("_", 1)[1]
-    if method == "Другой":
-        await callback.message.edit_text("Опишите способ передачи (2-50 символов, без мата, осмысленно):")
-        await state.set_state(SellAd.waiting_custom_transfer)
-        return
     await state.update_data(transfer=method)
     await callback.message.edit_text("Добавьте комментарий (или поставьте «-», если не нужно):")
     await state.set_state(SellAd.waiting_comment)
 
-@router.message(SellAd.waiting_custom_transfer)
-async def custom_transfer(message: Message, state: FSMContext):
-    method = message.text.strip()
-    if not is_meaningful_text(method, min_len=2, max_len=50):
-        await message.answer("Некорректное описание. Пишите осмысленно, без мата. Попробуйте ещё раз:")
-        return
-    await state.update_data(transfer=escape_md(method))
-    await message.answer("Добавьте комментарий (или поставьте «-», если не нужно):")
-    await state.set_state(SellAd.waiting_comment)
-
-# Комментарий
+# Комментарий – только проверка
 @router.message(SellAd.waiting_comment)
 async def process_comment(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -245,10 +184,10 @@ async def process_comment(message: Message, state: FSMContext):
             await message.answer("Слишком длинный комментарий (макс 200 символов). Сократите:")
             return
         if has_bad_word(raw_comment):
-            await message.answer("Комментарий содержит недопустимые выражения. Пожалуйста, исправьте:")
+            await message.answer("Комментарий содержит недопустимые выражения. Исправьте:")
             return
         if not re.search(r'[а-яА-ЯёЁa-zA-Z]', raw_comment):
-            await message.answer("Комментарий должен содержать хотя бы немного текста. Попробуйте ещё раз:")
+            await message.answer("Комментарий должен содержать текст. Попробуйте ещё раз:")
             return
         comment = escape_md(raw_comment)
     await state.update_data(comment=comment)
