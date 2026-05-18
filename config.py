@@ -1,10 +1,14 @@
 import os
 from dotenv import load_dotenv
 
-# Загружаем переменные из файла .env
 load_dotenv()
 
-# Достаём токены и ID администратора
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if BOT_TOKEN is None:
+    BOT_TOKEN = "8429549473:AAECo6LIbuvzLJoJotzdlEughiJkaDykLqQ"
+
 CRYPTO_BOT_TOKEN = os.getenv("CRYPTO_BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+if CRYPTO_BOT_TOKEN is None:
+    CRYPTO_BOT_TOKEN = "583578:AAET9DoMT6sfgs2x5eMPOc3QSas9gQ5kJIM"
+
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6665494648"))
