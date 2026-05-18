@@ -28,11 +28,27 @@ def back_to_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def operator_choice() -> InlineKeyboardMarkup:
-    operators = ["Yota", "Tele2", "MTS", "Билайн", "Мегафон", "Другой"]
+    # Временно только Tele2
     builder = InlineKeyboardBuilder()
-    for op in operators:
-        builder.add(InlineKeyboardButton(text=op, callback_data=f"op_{op}"))
-    builder.adjust(3)
+    builder.add(InlineKeyboardButton(text="Tele2", callback_data="op_Tele2"))
+    builder.row(InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+def region_choice() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    regions = ["Москва", "Санкт-Петербург", "Вся Россия", "Другой"]
+    for r in regions:
+        builder.add(InlineKeyboardButton(text=r, callback_data=f"region_{r}"))
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_menu"))
+    return builder.as_markup()
+
+def transfer_choice() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    methods = ["По номеру телефона", "Через приложение оператора", "Другой"]
+    for m in methods:
+        builder.add(InlineKeyboardButton(text=m, callback_data=f"transfer_{m}"))
+    builder.adjust(1)
     builder.row(InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_menu"))
     return builder.as_markup()
 
