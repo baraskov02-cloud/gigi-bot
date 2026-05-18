@@ -1,4 +1,4 @@
-import asyncio
+import asyncio, re
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, StateFilter
@@ -15,12 +15,24 @@ from crypto_bot import create_invoice, check_invoice, transfer_money
 
 router = Router()
 
+# ---------- Функция для безопасного вывода в Markdown ----------
+def escape_md(text: str) -> str:
+    """Экранирует спецсимволы старого Markdown, кроме ** и ` """
+    if not text:
+        return text
+    # Символы, которые нужно экранировать: _ * ` [ ] ( ) ~ \
+    escape_chars = r'_*`[]()~\\'
+    # Заменяем каждый такой символ на \ + символ, но чтобы не сломать уже экранированные
+    # Простой подход: экранируем все, кроме тех, что уже экранированы
+    # Но мы будем применять эту функцию к сырым данным, поэтому просто экранируем все.
+    return re.sub(r'([_*`\[\]()~\\])', r'\\\1', text)
+
 # ==================== /start ====================
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     await ensure_user(message.from_user.id, message.from_user.username)
     await message.answer(
-        "👋 Добро пожаловать в <b>Gigi Bot</b> — безопасную биржу гигабайтов!\n"
+        "👋 Добро пожаловать в **Gigi Bot** — безопасную биржу гигабайтов!\n"
         "Выберите действие:",
         reply_markup=main_menu()
     )
@@ -40,23 +52,23 @@ async def show_profile(callback: CallbackQuery):
         await callback.answer("Сначала нажмите /start")
         return
     uname, bal, rating, deals = user
+    uname_safe = escape_md(uname) if uname else "нет"
     text = (
-        f"👤 <b>Профиль</b>\n"
-        f"🆔 ID: <code>{uid}</code>\n"
-        f"👤 Username: @{uname or 'нет'}\n"
-        f"💰 Баланс: <b>{bal:.2f} USDT</b>\n"
+        f"👤 **Профиль**\n"
+        f"🆔 ID: `{uid}`\n"
+        f"👤 Username: @{uname_safe}\n"
+        f"💰 Баланс: **{bal:.2f} USDT**\n"
         f"⭐ Рейтинг: {rating:.1f}/5\n"
         f"📊 Сделок: {deals}\n"
     )
     await callback.message.edit_text(text, reply_markup=profile_actions())
 
-# ==================== Пополнение (исправлено) ====================
+# ==================== Пополнение ====================
 @router.callback_query(F.data == "deposit")
 async def start_deposit(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите сумму пополнения в USDT (минимум 1):")
     await state.set_state("wait_deposit_amount")
 
-# Только для этого состояния, иначе не трогаем число
 @router.message(F.text.regexp(r"^\d+(\.\d+)?$"), StateFilter("wait_deposit_amount"))
 async def process_deposit_amount(message: Message, state: FSMContext):
     amount = float(message.text)
@@ -98,7 +110,7 @@ async def check_payment(callback: CallbackQuery):
     else:
         await callback.answer("Оплата ещё не прошла. Попробуйте позже.", show_alert=True)
 
-# ==================== Продажа (исправленная цепочка) ====================
+# ==================== Продажа ====================
 @router.callback_query(F.data == "sell")
 async def start_sell(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите оператора:", reply_markup=operator_choice())
@@ -140,23 +152,27 @@ async def process_price(message: Message, state: FSMContext):
 
 @router.message(SellAd.waiting_region)
 async def process_region(message: Message, state: FSMContext):
-    await state.update_data(region=message.text)
+    # Экранируем регион, чтобы случайные спецсимволы не сломали разметку
+    region = escape_md(message.text)
+    await state.update_data(region=region)
     await message.answer("Способ передачи (например, «По номеру телефона»):")
     await state.set_state(SellAd.waiting_transfer)
 
 @router.message(SellAd.waiting_transfer)
 async def process_transfer(message: Message, state: FSMContext):
-    await state.update_data(transfer=message.text)
+    transfer = escape_md(message.text)
+    await state.update_data(transfer=transfer)
     await message.answer("Комментарий к объявлению (или поставьте «-»):")
     await state.set_state(SellAd.waiting_comment)
 
 @router.message(SellAd.waiting_comment)
 async def process_comment(message: Message, state: FSMContext):
     data = await state.get_data()
-    comment = message.text if message.text != '-' else ''
+    raw_comment = message.text if message.text != '-' else ''
+    comment = escape_md(raw_comment)
     await state.update_data(comment=comment)
     preview = (
-        f"📡 <b>Проверьте объявление</b>\n\n"
+        f"📡 **Проверьте объявление**\n\n"
         f"Оператор: {data['operator']}\n"
         f"ГБ: {data['gb']}\n"
         f"Цена: {data['price']:.2f} USDT\n"
@@ -166,7 +182,7 @@ async def process_comment(message: Message, state: FSMContext):
         "Всё верно?"
     )
     await message.answer(preview, reply_markup=confirm_ad())
-    await state.set_state("confirm_ad")   # ждём кнопку
+    await state.set_state("confirm_ad")
 
 @router.callback_query(F.data == "publish_ad")
 async def publish_ad(callback: CallbackQuery, state: FSMContext):
@@ -174,7 +190,8 @@ async def publish_ad(callback: CallbackQuery, state: FSMContext):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
             "INSERT INTO ads (seller_id, operator, gb, price, region, transfer_method, comment) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (callback.from_user.id, data['operator'], data['gb'], data['price'], data['region'], data['transfer'], data.get('comment', ''))
+            (callback.from_user.id, data['operator'], data['gb'], data['price'],
+             data['region'], data['transfer'], data.get('comment', ''))
         )
         await db.commit()
     await callback.message.edit_text("✅ Объявление успешно опубликовано!", reply_markup=main_menu())
@@ -199,13 +216,15 @@ async def list_ads(callback: CallbackQuery):
     if not ads:
         await callback.answer("Нет активных объявлений.")
         return
-    lines = ["<b>📦 Актуальные лоты:</b>\n"]
+    lines = ["📦 **Актуальные лоты:**\n"]
     builder = InlineKeyboardBuilder()
     for ad in ads:
         ad_id, op, gb, price, region, seller_id, uname, rating, deals = ad
+        uname_safe = escape_md(uname) if uname else "нет"
+        region_safe = escape_md(region)
         lines.append(
             f"#{ad_id} {op} · {gb}ГБ · {price:.2f} USDT\n"
-            f"📍 {region} | 👤 @{uname or 'нет'}\n"
+            f"📍 {region_safe} | 👤 @{uname_safe}\n"
             f"⭐ {rating:.1f} · {deals} сделок\n"
         )
         builder.row(InlineKeyboardButton(text=f"Купить #{ad_id}", callback_data=f"buyad_{ad_id}"))
@@ -241,10 +260,12 @@ async def initiate_deal(callback: CallbackQuery):
         await db.execute("INSERT INTO transactions (user_id, type, amount, status) VALUES (?, 'purchase', ?, 'completed')",
                          (buyer_id, price))
         await db.commit()
+    # Уведомление продавцу (escape)
+    buyer_uname = escape_md(callback.from_user.username) if callback.from_user.username else "нет"
     await callback.bot.send_message(
         seller_id,
         f"🎉 Ваш лот #{ad_id} ({operator} {gb}ГБ) купили за {price} USDT.\n"
-        f"Покупатель: @{callback.from_user.username or 'нет'}\n"
+        f"Покупатель: @{buyer_uname}\n"
         f"Переведите гигабайты и ожидайте подтверждения."
     )
     await callback.message.edit_text(
@@ -289,13 +310,14 @@ async def open_dispute(callback: CallbackQuery, state: FSMContext):
 async def submit_dispute(message: Message, state: FSMContext):
     data = await state.get_data()
     deal_id = data['deal_id']
-    reason = message.text
+    reason = escape_md(message.text)
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT INTO disputes (deal_id, initiator_id, reason) VALUES (?, ?, ?)",
                          (deal_id, message.from_user.id, reason))
         await db.execute("UPDATE deals SET status = 'disputed' WHERE id = ?", (deal_id,))
         await db.commit()
-        await message.bot.send_message(ADMIN_ID, f"⚠️ Спор по сделке #{deal_id}\nИнициатор: @{message.from_user.username}\nПричина: {reason}")
+        initiator_uname = escape_md(message.from_user.username) if message.from_user.username else "нет"
+        await message.bot.send_message(ADMIN_ID, f"⚠️ Спор по сделке #{deal_id}\nИнициатор: @{initiator_uname}\nПричина: {reason}")
     await message.answer("Спор открыт. Администратор свяжется с вами.", reply_markup=main_menu())
     await state.clear()
 
@@ -320,10 +342,11 @@ async def my_purchases(callback: CallbackQuery):
     if not rows:
         await callback.answer("У вас пока нет покупок.")
         return
-    lines = ["<b>📥 Ваши покупки:</b>\n"]
+    lines = ["📥 **Ваши покупки:**\n"]
     for deal_id, op, gb, amount, status, seller_id, uname in rows:
         status_text = {"paid": "⏳ Ожидает", "completed": "✅ Завершено", "disputed": "⚠️ Спор"}.get(status, status)
-        lines.append(f"#{deal_id} {op} {gb}ГБ — {amount} USDT | {status_text}\nПродавец: @{uname or 'нет'}")
+        uname_safe = escape_md(uname) if uname else "нет"
+        lines.append(f"#{deal_id} {op} {gb}ГБ — {amount} USDT | {status_text}\nПродавец: @{uname_safe}")
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="my_deals"))
     await callback.message.edit_text("\n".join(lines), reply_markup=builder.as_markup())
@@ -344,10 +367,11 @@ async def my_sales(callback: CallbackQuery):
     if not rows:
         await callback.answer("У вас пока нет продаж.")
         return
-    lines = ["<b>📤 Ваши продажи:</b>\n"]
+    lines = ["📤 **Ваши продажи:**\n"]
     for deal_id, op, gb, amount, status, buyer_id, uname in rows:
         status_text = {"paid": "⏳ Ожидает", "completed": "✅ Завершено", "disputed": "⚠️ Спор"}.get(status, status)
-        lines.append(f"#{deal_id} {op} {gb}ГБ — {amount} USDT | {status_text}\nПокупатель: @{uname or 'нет'}")
+        uname_safe = escape_md(uname) if uname else "нет"
+        lines.append(f"#{deal_id} {op} {gb}ГБ — {amount} USDT | {status_text}\nПокупатель: @{uname_safe}")
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="my_deals"))
     await callback.message.edit_text("\n".join(lines), reply_markup=builder.as_markup())
@@ -355,11 +379,21 @@ async def my_sales(callback: CallbackQuery):
 # ==================== Остальные кнопки ====================
 @router.callback_query(F.data == "support")
 async def support(callback: CallbackQuery):
-    await callback.message.edit_text("📧 По всем вопросам: @support_username", reply_markup=back_to_menu())
+    await callback.message.edit_text(
+        "📧 По всем вопросам обращайтесь: **@bapawko8**\n\n"
+        "Опишите проблему, и мы поможем.",
+        reply_markup=back_to_menu()
+    )
 
 @router.callback_query(F.data == "rules")
 async def rules(callback: CallbackQuery):
-    await callback.message.edit_text("📜 Правила сервиса:\n1. Запрещено мошенничество.\n2. Соблюдайте условия сделок.\n3. При спорах обращайтесь к гаранту.", reply_markup=back_to_menu())
+    await callback.message.edit_text(
+        "📜 **Правила сервиса:**\n"
+        "1. Запрещено мошенничество.\n"
+        "2. Соблюдайте условия сделок.\n"
+        "3. При спорах обращайтесь к гаранту.",
+        reply_markup=back_to_menu()
+    )
 
 @router.callback_query(F.data == "referral")
 async def referral(callback: CallbackQuery):
