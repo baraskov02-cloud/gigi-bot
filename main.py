@@ -1,25 +1,21 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
 from config import BOT_TOKEN
 from database import init_db
 from handlers import router
 
 async def main():
-    # 1. Создаём таблицы в базе данных
     await init_db()
 
-    # 2. Инициализируем бота
-    bot = Bot(token=BOT_TOKEN)
+    # Включаем классическую Markdown‑разметку (поддерживает **жирный** и `код`)
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 
-    # 3. Хранилище состояний
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
-
-    # 4. Подключаем обработчики
     dp.include_router(router)
 
-    # 5. Удаляем вебхуки и запускаем поллинг
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
