@@ -1,7 +1,7 @@
 import asyncio
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
@@ -50,16 +50,15 @@ async def show_profile(callback: CallbackQuery):
     )
     await callback.message.edit_text(text, reply_markup=profile_actions())
 
-# ==================== Пополнение (оставлено без изменений) ====================
+# ==================== Пополнение (исправлено) ====================
 @router.callback_query(F.data == "deposit")
 async def start_deposit(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите сумму пополнения в USDT (минимум 1):")
     await state.set_state("wait_deposit_amount")
 
-@router.message(F.text.regexp(r"^\d+(\.\d+)?$"))
+# Только для этого состояния, иначе не трогаем число
+@router.message(F.text.regexp(r"^\d+(\.\d+)?$"), StateFilter("wait_deposit_amount"))
 async def process_deposit_amount(message: Message, state: FSMContext):
-    if await state.get_state() != "wait_deposit_amount":
-        return
     amount = float(message.text)
     if amount < 1:
         await message.answer("Минимальная сумма 1 USDT.")
@@ -99,7 +98,7 @@ async def check_payment(callback: CallbackQuery):
     else:
         await callback.answer("Оплата ещё не прошла. Попробуйте позже.", show_alert=True)
 
-# ==================== Продажа (с подтверждением) ====================
+# ==================== Продажа (исправленная цепочка) ====================
 @router.callback_query(F.data == "sell")
 async def start_sell(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите оператора:", reply_markup=operator_choice())
@@ -156,7 +155,6 @@ async def process_comment(message: Message, state: FSMContext):
     data = await state.get_data()
     comment = message.text if message.text != '-' else ''
     await state.update_data(comment=comment)
-    # Показываем карточку для подтверждения
     preview = (
         f"📡 <b>Проверьте объявление</b>\n\n"
         f"Оператор: {data['operator']}\n"
@@ -168,7 +166,7 @@ async def process_comment(message: Message, state: FSMContext):
         "Всё верно?"
     )
     await message.answer(preview, reply_markup=confirm_ad())
-    await state.set_state(SellAd.waiting_comment)  # остаёмся, чтобы принять решение
+    await state.set_state("confirm_ad")   # ждём кнопку
 
 @router.callback_query(F.data == "publish_ad")
 async def publish_ad(callback: CallbackQuery, state: FSMContext):
@@ -182,7 +180,7 @@ async def publish_ad(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("✅ Объявление успешно опубликовано!", reply_markup=main_menu())
     await state.clear()
 
-# ==================== Покупка: просмотр лотов ====================
+# ==================== Покупка ====================
 @router.callback_query(F.data == "buy")
 async def show_buy_menu(callback: CallbackQuery):
     await callback.message.edit_text("Выберите действие:", reply_markup=buy_menu())
@@ -214,7 +212,6 @@ async def list_ads(callback: CallbackQuery):
     builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="buy"))
     await callback.message.edit_text("\n".join(lines), reply_markup=builder.as_markup(), disable_web_page_preview=True)
 
-# ==================== Создание сделки ====================
 @router.callback_query(F.data.startswith("buyad_"))
 async def initiate_deal(callback: CallbackQuery):
     ad_id = int(callback.data.split("_")[1])
@@ -235,7 +232,6 @@ async def initiate_deal(callback: CallbackQuery):
     if not bal or bal[0] < price:
         await callback.answer("Недостаточно средств на балансе. Пополните счёт.", show_alert=True)
         return
-    # Заморозка и сделка
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (price, buyer_id))
         cur = await db.execute("INSERT INTO deals (ad_id, buyer_id, seller_id, amount, status) VALUES (?, ?, ?, ?, 'paid')",
@@ -245,7 +241,6 @@ async def initiate_deal(callback: CallbackQuery):
         await db.execute("INSERT INTO transactions (user_id, type, amount, status) VALUES (?, 'purchase', ?, 'completed')",
                          (buyer_id, price))
         await db.commit()
-    # Сообщение продавцу
     await callback.bot.send_message(
         seller_id,
         f"🎉 Ваш лот #{ad_id} ({operator} {gb}ГБ) купили за {price} USDT.\n"
@@ -304,7 +299,7 @@ async def submit_dispute(message: Message, state: FSMContext):
     await message.answer("Спор открыт. Администратор свяжется с вами.", reply_markup=main_menu())
     await state.clear()
 
-# ==================== Мои сделки (покупки/продажи) ====================
+# ==================== Мои сделки ====================
 @router.callback_query(F.data == "my_deals")
 async def my_deals_menu_handler(callback: CallbackQuery):
     await callback.message.edit_text("Выберите категорию сделок:", reply_markup=my_deals_menu())
