@@ -1,17 +1,11 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class SellAd(StatesGroup):
-    """Состояния для создания объявления о продаже"""
-    waiting_operator = State()
-    waiting_gb = State()
-    waiting_price = State()
-    waiting_region = State()
-    waiting_transfer = State()
-    waiting_comment = State()
-
-class BuyFilter(StatesGroup):
-    """Состояния для фильтрации объявлений при покупке (опционально)"""
-    waiting_operator = State()
-    waiting_region = State()
-    waiting_max_price = State()
-    waiting_min_gb = State()
+    waiting_operator = State()      # выбор оператора
+    waiting_gb = State()            # сколько ГБ
+    waiting_price = State()         # цена
+    waiting_region = State()        # выбор региона (из кнопок)
+    waiting_custom_region = State() # свой регион текстом
+    waiting_transfer = State()      # выбор способа передачи (из кнопок)
+    waiting_custom_transfer = State() # свой способ текстом
+    waiting_comment = State()       # комментарий
