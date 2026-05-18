@@ -15,22 +15,56 @@ from crypto_bot import create_invoice, check_invoice, transfer_money
 
 router = Router()
 
+# ---------- Список запрещённых слов (маты и грубости) ----------
+BAD_WORDS = [
+    "хуй", "пизда", "ебать", "бля", "сука", "нахуй", "залупа",
+    "жопа", "говно", "мудак", "пидор", "член", "шлюха", "трах",
+    "ахуеть", "охуеть", "пиздец", "хуево", "пиздос",
+]  # можешь дополнить по желанию
+
+def has_bad_word(text: str) -> bool:
+    """Проверяет, есть ли в тексте запрещённое слово (в любой части)."""
+    text_lower = text.lower()
+    for word in BAD_WORDS:
+        if word in text_lower:
+            return True
+    return False
+
 # ---------- Функция для безопасного вывода в Markdown ----------
 def escape_md(text: str) -> str:
     if not text:
         return text
     return re.sub(r'([_*`\[\]()~\\])', r'\\\1', text)
 
-# ---------- Проверка адекватности текста ----------
-def is_valid_text(text: str, min_len=2, max_len=50) -> bool:
-    """Текст должен содержать буквы, не быть только цифрами/спецсимволами"""
+# ---------- Усиленная проверка осмысленности текста ----------
+def is_meaningful_text(text: str, min_len=2, max_len=50) -> bool:
+    """
+    Проверяет, что текст:
+    - не содержит мата,
+    - имеет допустимую длину,
+    - содержит хотя бы одну гласную букву,
+    - не состоит только из согласных или бессмысленного набора.
+    """
     if len(text) < min_len or len(text) > max_len:
         return False
-    # Хотя бы одна буква (русская или латиница) и нет запрещённых символов вроде <> (для безопасности)
-    if re.search(r'[<>]', text):
+    if re.search(r'[<>]', text):  # запрещённые символы
         return False
-    # Должна быть хотя бы одна буква или пробел (чтобы отсеять #### или 12345)
+    if has_bad_word(text):
+        return False
+    # Проверка на наличие хотя бы одной буквы
     if not re.search(r'[а-яА-ЯёЁa-zA-Z]', text):
+        return False
+    # Хотя бы одна гласная (русская или латинская)
+    vowels = r'[аеёиоуыэюяaeiouy]'
+    if not re.search(vowels, text, re.IGNORECASE):
+        return False
+    # Если текст короткий (2–3 символа) — разрешаем только если есть гласная и ещё одна буква
+    if len(text) <= 3:
+        # достаточно, что есть гласная и это не запрещённое слово (уже проверили)
+        return True
+    # Для более длинных: требовать, чтобы было не менее двух различных букв (не одна и та же)
+    unique_letters = set(text.lower()) & set("абвгдеёжзийклмнопрстуфхцчшщъыьэюяabcdefghijklmnopqrstuvwxyz")
+    if len(unique_letters) < 2:
         return False
     return True
 
@@ -117,7 +151,7 @@ async def check_payment(callback: CallbackQuery):
     else:
         await callback.answer("Оплата ещё не прошла. Попробуйте позже.", show_alert=True)
 
-# ==================== Продажа (Tele2 + умный ввод) ====================
+# ==================== Продажа (Tele2 + усиленная валидация) ====================
 @router.callback_query(F.data == "sell")
 async def start_sell(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите оператора:", reply_markup=operator_choice())
@@ -162,7 +196,7 @@ async def process_price(message: Message, state: FSMContext):
 async def choose_region(callback: CallbackQuery, state: FSMContext):
     region = callback.data.split("_", 1)[1]  # "Москва" и т.д.
     if region == "Другой":
-        await callback.message.edit_text("Напишите ваш регион (город, область). Только буквы, пробелы и дефис (2-50 символов):")
+        await callback.message.edit_text("Напишите ваш регион (город, область). Только буквы, пробелы и дефис. Без мата и бессмыслицы (2-50 символов):")
         await state.set_state(SellAd.waiting_custom_region)
         return
     await state.update_data(region=region)
@@ -173,8 +207,8 @@ async def choose_region(callback: CallbackQuery, state: FSMContext):
 @router.message(SellAd.waiting_custom_region)
 async def custom_region(message: Message, state: FSMContext):
     region = message.text.strip()
-    if not is_valid_text(region, min_len=2, max_len=50):
-        await message.answer("Некорректный регион. Используйте только буквы, пробелы, дефис (2-50 символов). Попробуйте ещё раз:")
+    if not is_meaningful_text(region, min_len=2, max_len=50):
+        await message.answer("Некорректный регион. Используйте осмысленное название (буквы, пробелы, дефис). Без мата. Попробуйте ещё раз:")
         return
     await state.update_data(region=escape_md(region))
     await message.answer("Выберите способ передачи:", reply_markup=transfer_choice())
@@ -185,7 +219,7 @@ async def custom_region(message: Message, state: FSMContext):
 async def choose_transfer(callback: CallbackQuery, state: FSMContext):
     method = callback.data.split("_", 1)[1]
     if method == "Другой":
-        await callback.message.edit_text("Опишите способ передачи (2-50 символов, только буквы, цифры, пробелы, дефис):")
+        await callback.message.edit_text("Опишите способ передачи (2-50 символов, без мата, осмысленно):")
         await state.set_state(SellAd.waiting_custom_transfer)
         return
     await state.update_data(transfer=method)
@@ -196,8 +230,8 @@ async def choose_transfer(callback: CallbackQuery, state: FSMContext):
 @router.message(SellAd.waiting_custom_transfer)
 async def custom_transfer(message: Message, state: FSMContext):
     method = message.text.strip()
-    if not is_valid_text(method, min_len=2, max_len=50):
-        await message.answer("Некорректное описание. Используйте буквы, цифры, пробелы, дефис (2-50 символов). Попробуйте ещё раз:")
+    if not is_meaningful_text(method, min_len=2, max_len=50):
+        await message.answer("Некорректное описание. Пишите осмысленно, без мата. Попробуйте ещё раз:")
         return
     await state.update_data(transfer=escape_md(method))
     await message.answer("Добавьте комментарий (или поставьте «-», если не нужно):")
@@ -211,13 +245,15 @@ async def process_comment(message: Message, state: FSMContext):
     if raw_comment == '-':
         comment = ''
     else:
-        # Проверка на адекватность (длина до 200, и чтобы был смысл)
         if len(raw_comment) > 200:
             await message.answer("Слишком длинный комментарий (макс 200 символов). Сократите:")
             return
-        # Проверка на бессмысленный набор символов: должна быть хотя бы одна буква, или это могут быть цифры с буквами
-        if not re.search(r'[а-яА-ЯёЁa-zA-Z0-9]', raw_comment):
-            await message.answer("Комментарий должен содержать осмысленный текст. Попробуйте ещё раз:")
+        if has_bad_word(raw_comment):
+            await message.answer("Комментарий содержит недопустимые выражения. Пожалуйста, исправьте:")
+            return
+        # Проверка на осмысленность: хотя бы одна буква, не сплошные цифры/символы
+        if not re.search(r'[а-яА-ЯёЁa-zA-Z]', raw_comment):
+            await message.answer("Комментарий должен содержать хотя бы немного текста. Попробуйте ещё раз:")
             return
         comment = escape_md(raw_comment)
     await state.update_data(comment=comment)
