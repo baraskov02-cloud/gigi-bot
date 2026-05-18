@@ -17,15 +17,22 @@ router = Router()
 
 # ---------- Функция для безопасного вывода в Markdown ----------
 def escape_md(text: str) -> str:
-    """Экранирует спецсимволы старого Markdown, кроме ** и ` """
     if not text:
         return text
-    # Символы, которые нужно экранировать: _ * ` [ ] ( ) ~ \
-    escape_chars = r'_*`[]()~\\'
-    # Заменяем каждый такой символ на \ + символ, но чтобы не сломать уже экранированные
-    # Простой подход: экранируем все, кроме тех, что уже экранированы
-    # Но мы будем применять эту функцию к сырым данным, поэтому просто экранируем все.
     return re.sub(r'([_*`\[\]()~\\])', r'\\\1', text)
+
+# ---------- Проверка адекватности текста ----------
+def is_valid_text(text: str, min_len=2, max_len=50) -> bool:
+    """Текст должен содержать буквы, не быть только цифрами/спецсимволами"""
+    if len(text) < min_len or len(text) > max_len:
+        return False
+    # Хотя бы одна буква (русская или латиница) и нет запрещённых символов вроде <> (для безопасности)
+    if re.search(r'[<>]', text):
+        return False
+    # Должна быть хотя бы одна буква или пробел (чтобы отсеять #### или 12345)
+    if not re.search(r'[а-яА-ЯёЁa-zA-Z]', text):
+        return False
+    return True
 
 # ==================== /start ====================
 @router.message(CommandStart())
@@ -110,7 +117,7 @@ async def check_payment(callback: CallbackQuery):
     else:
         await callback.answer("Оплата ещё не прошла. Попробуйте позже.", show_alert=True)
 
-# ==================== Продажа ====================
+# ==================== Продажа (Tele2 + умный ввод) ====================
 @router.callback_query(F.data == "sell")
 async def start_sell(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Выберите оператора:", reply_markup=operator_choice())
@@ -118,7 +125,7 @@ async def start_sell(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(SellAd.waiting_operator, F.data.startswith("op_"))
 async def choose_operator(callback: CallbackQuery, state: FSMContext):
-    operator = callback.data.split("_")[1]
+    operator = callback.data.split("_")[1]  # Tele2
     await state.update_data(operator=operator)
     await callback.message.edit_text("Сколько ГБ продаёте? (целое число)")
     await state.set_state(SellAd.waiting_gb)
@@ -147,29 +154,72 @@ async def process_price(message: Message, state: FSMContext):
         await message.answer("Цена должна быть положительной.")
         return
     await state.update_data(price=price)
-    await message.answer("Регион (например, Москва или «Вся Россия»):")
+    await message.answer("Выберите регион:", reply_markup=region_choice())
     await state.set_state(SellAd.waiting_region)
 
-@router.message(SellAd.waiting_region)
-async def process_region(message: Message, state: FSMContext):
-    # Экранируем регион, чтобы случайные спецсимволы не сломали разметку
-    region = escape_md(message.text)
+# Регион: выбор из кнопок
+@router.callback_query(SellAd.waiting_region, F.data.startswith("region_"))
+async def choose_region(callback: CallbackQuery, state: FSMContext):
+    region = callback.data.split("_", 1)[1]  # "Москва" и т.д.
+    if region == "Другой":
+        await callback.message.edit_text("Напишите ваш регион (город, область). Только буквы, пробелы и дефис (2-50 символов):")
+        await state.set_state(SellAd.waiting_custom_region)
+        return
     await state.update_data(region=region)
-    await message.answer("Способ передачи (например, «По номеру телефона»):")
+    await callback.message.edit_text("Выберите способ передачи:", reply_markup=transfer_choice())
     await state.set_state(SellAd.waiting_transfer)
 
-@router.message(SellAd.waiting_transfer)
-async def process_transfer(message: Message, state: FSMContext):
-    transfer = escape_md(message.text)
-    await state.update_data(transfer=transfer)
-    await message.answer("Комментарий к объявлению (или поставьте «-»):")
+# Обработчик своего региона
+@router.message(SellAd.waiting_custom_region)
+async def custom_region(message: Message, state: FSMContext):
+    region = message.text.strip()
+    if not is_valid_text(region, min_len=2, max_len=50):
+        await message.answer("Некорректный регион. Используйте только буквы, пробелы, дефис (2-50 символов). Попробуйте ещё раз:")
+        return
+    await state.update_data(region=escape_md(region))
+    await message.answer("Выберите способ передачи:", reply_markup=transfer_choice())
+    await state.set_state(SellAd.waiting_transfer)
+
+# Способ передачи: выбор из кнопок
+@router.callback_query(SellAd.waiting_transfer, F.data.startswith("transfer_"))
+async def choose_transfer(callback: CallbackQuery, state: FSMContext):
+    method = callback.data.split("_", 1)[1]
+    if method == "Другой":
+        await callback.message.edit_text("Опишите способ передачи (2-50 символов, только буквы, цифры, пробелы, дефис):")
+        await state.set_state(SellAd.waiting_custom_transfer)
+        return
+    await state.update_data(transfer=method)
+    await callback.message.edit_text("Добавьте комментарий (или поставьте «-», если не нужно):")
     await state.set_state(SellAd.waiting_comment)
 
+# Обработчик своего способа передачи
+@router.message(SellAd.waiting_custom_transfer)
+async def custom_transfer(message: Message, state: FSMContext):
+    method = message.text.strip()
+    if not is_valid_text(method, min_len=2, max_len=50):
+        await message.answer("Некорректное описание. Используйте буквы, цифры, пробелы, дефис (2-50 символов). Попробуйте ещё раз:")
+        return
+    await state.update_data(transfer=escape_md(method))
+    await message.answer("Добавьте комментарий (или поставьте «-», если не нужно):")
+    await state.set_state(SellAd.waiting_comment)
+
+# Комментарий
 @router.message(SellAd.waiting_comment)
 async def process_comment(message: Message, state: FSMContext):
     data = await state.get_data()
-    raw_comment = message.text if message.text != '-' else ''
-    comment = escape_md(raw_comment)
+    raw_comment = message.text.strip()
+    if raw_comment == '-':
+        comment = ''
+    else:
+        # Проверка на адекватность (длина до 200, и чтобы был смысл)
+        if len(raw_comment) > 200:
+            await message.answer("Слишком длинный комментарий (макс 200 символов). Сократите:")
+            return
+        # Проверка на бессмысленный набор символов: должна быть хотя бы одна буква, или это могут быть цифры с буквами
+        if not re.search(r'[а-яА-ЯёЁa-zA-Z0-9]', raw_comment):
+            await message.answer("Комментарий должен содержать осмысленный текст. Попробуйте ещё раз:")
+            return
+        comment = escape_md(raw_comment)
     await state.update_data(comment=comment)
     preview = (
         f"📡 **Проверьте объявление**\n\n"
@@ -260,7 +310,6 @@ async def initiate_deal(callback: CallbackQuery):
         await db.execute("INSERT INTO transactions (user_id, type, amount, status) VALUES (?, 'purchase', ?, 'completed')",
                          (buyer_id, price))
         await db.commit()
-    # Уведомление продавцу (escape)
     buyer_uname = escape_md(callback.from_user.username) if callback.from_user.username else "нет"
     await callback.bot.send_message(
         seller_id,
